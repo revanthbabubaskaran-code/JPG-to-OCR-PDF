@@ -6,14 +6,12 @@ import argparse
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 
-def convert_image(image_path: str | Path, output_path: str | Path, language: str = "eng") -> int:
-    """Create a PDF with the original image and an invisible, selectable OCR layer.
-
-    Returns the number of OCR words placed in the PDF.
-    """
+def _add_image_page(pdf, image_path: str | Path, language: str) -> int:
+    """Add one image and its invisible OCR layer to an existing PDF canvas."""
     try:
         from PIL import Image, ImageOps
         import pytesseract
@@ -25,11 +23,8 @@ def convert_image(image_path: str | Path, output_path: str | Path, language: str
         raise RuntimeError("Dependencies are missing. Install them with: pip install -e .") from exc
 
     source = Path(image_path).expanduser()
-    target = Path(output_path).expanduser()
     if not source.is_file():
         raise FileNotFoundError(f"Image not found: {source}")
-    if source.resolve() == target.resolve():
-        raise ValueError("The PDF output path must be different from the image path.")
     # pytesseract uses this setting when Tesseract is installed in its common
     # Windows folder but that folder was not added to PATH.
     if os.name == "nt" and not shutil.which("tesseract"):
@@ -50,7 +45,6 @@ def convert_image(image_path: str | Path, output_path: str | Path, language: str
             "Tesseract OCR is not installed or could not be found. Install it from the setup link in README.md."
         ) from exc
 
-    target.parent.mkdir(parents=True, exist_ok=True)
     # Fit the scan to an A4 page while preserving its aspect ratio. This makes
     # phone photos and screenshots print at a useful document size too.
     a4_width, a4_height = 595.28, 841.89
@@ -58,7 +52,7 @@ def convert_image(image_path: str | Path, output_path: str | Path, language: str
         a4_width, a4_height = a4_height, a4_width
     scale = min(a4_width / image.width, a4_height / image.height)
     page_width, page_height = image.width * scale, image.height * scale
-    pdf = canvas.Canvas(str(target), pagesize=(page_width, page_height), pageCompression=1)
+    pdf.setPageSize((page_width, page_height))
     pdf.drawImage(ImageReader(image), 0, 0, width=page_width, height=page_height, preserveAspectRatio=False)
 
     # Prefer a Unicode font when available (for example, Nirmala UI on Windows
@@ -76,7 +70,8 @@ def convert_image(image_path: str | Path, output_path: str | Path, language: str
     for font_path in font_candidates:
         if font_path.is_file():
             try:
-                pdfmetrics.registerFont(TTFont("SearchableUnicode", str(font_path)))
+                if "SearchableUnicode" not in pdfmetrics.getRegisteredFontNames():
+                    pdfmetrics.registerFont(TTFont("SearchableUnicode", str(font_path)))
                 font_name = "SearchableUnicode"
                 break
             except Exception:
@@ -114,8 +109,49 @@ def convert_image(image_path: str | Path, output_path: str | Path, language: str
         count += 1
     pdf.drawText(text)
     pdf.showPage()
-    pdf.save()
     return count
+
+
+def convert_images(image_paths: list[str | Path], output_path: str | Path, language: str = "eng") -> int:
+    """Create one multi-page searchable PDF from one or more images.
+
+    Returns the total number of OCR words placed across all pages.
+    """
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+    except ImportError as exc:
+        raise RuntimeError("Dependencies are missing. Install them with: pip install -e .") from exc
+
+    sources = [Path(path).expanduser() for path in image_paths]
+    if not sources:
+        raise ValueError("Choose at least one image to convert.")
+    for source in sources:
+        if not source.is_file():
+            raise FileNotFoundError(f"Image not found: {source}")
+
+    target = Path(output_path).expanduser()
+    if any(source.resolve() == target.resolve() for source in sources):
+        raise ValueError("The PDF output path must be different from every input image.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{target.stem}.", suffix=".pdf", dir=target.parent, delete=False
+    ) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        pdf = canvas.Canvas(str(temporary_path), pagesize=A4, pageCompression=1)
+        word_count = sum(_add_image_page(pdf, source, language) for source in sources)
+        pdf.save()
+        temporary_path.replace(target)
+        return word_count
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def convert_image(image_path: str | Path, output_path: str | Path, language: str = "eng") -> int:
+    """Create a searchable PDF from one image. Returns its recognized word count."""
+    return convert_images([image_path], output_path, language=language)
 
 
 def _run_gui() -> None:
@@ -124,54 +160,169 @@ def _run_gui() -> None:
 
     root = tk.Tk()
     root.title("Searchable JPG to PDF")
-    root.resizable(False, False)
+    root.minsize(780, 590)
     frame = ttk.Frame(root, padding=18)
     frame.grid(sticky="nsew")
-    ttk.Label(frame, text="Create a searchable PDF from a JPG", font=("Segoe UI", 14, "bold")).grid(
-        row=0, column=0, columnspan=3, sticky="w", pady=(0, 14)
+    root.columnconfigure(0, weight=1)
+    root.rowconfigure(0, weight=1)
+    frame.columnconfigure(0, weight=1)
+    frame.columnconfigure(1, weight=1)
+    ttk.Label(frame, text="Create searchable PDFs from images", font=("Segoe UI", 14, "bold")).grid(
+        row=0, column=0, columnspan=3, sticky="w", pady=(0, 12)
     )
-    image_var, output_var, language_var = tk.StringVar(), tk.StringVar(), tk.StringVar(value="eng")
+    image_paths: list[str] = []
+    destination_var = tk.StringVar()
+    language_var = tk.StringVar(value="eng")
+    mode_var = tk.StringVar(value="single")
+    destination_label_var = tk.StringVar(value="Output PDF")
+    count_var = tk.StringVar(value="No images selected")
+    status_var = tk.StringVar(value="Add one or more JPG images to begin.")
 
-    def choose_image() -> None:
-        chosen = filedialog.askopenfilename(
-            title="Choose a JPG image",
+    ttk.Label(frame, text="Input images").grid(row=1, column=0, sticky="w")
+    ttk.Label(frame, textvariable=count_var).grid(row=1, column=1, columnspan=2, sticky="e")
+    list_frame = ttk.Frame(frame)
+    list_frame.grid(row=2, column=0, columnspan=3, sticky="nsew", pady=(4, 5))
+    frame.rowconfigure(2, weight=1)
+    list_frame.columnconfigure(0, weight=1)
+    list_frame.rowconfigure(0, weight=1)
+    image_list = tk.Listbox(list_frame, height=10, selectmode=tk.EXTENDED, activestyle="dotbox")
+    image_list.grid(row=0, column=0, sticky="nsew")
+    scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=image_list.yview)
+    scrollbar.grid(row=0, column=1, sticky="ns")
+    image_list.configure(yscrollcommand=scrollbar.set)
+
+    def refresh_list() -> None:
+        image_list.delete(0, tk.END)
+        for path in image_paths:
+            image_list.insert(tk.END, path)
+        count_var.set(f"{len(image_paths)} image{'s' if len(image_paths) != 1 else ''} selected")
+
+    def add_images() -> None:
+        chosen = filedialog.askopenfilenames(
+            title="Choose one or more images",
             filetypes=[("JPEG images", "*.jpg *.jpeg"), ("Image files", "*.jpg *.jpeg *.png *.tif *.tiff *.bmp")],
         )
-        if chosen:
-            image_var.set(chosen)
-            output_var.set(str(Path(chosen).with_suffix(".pdf")))
+        known = {str(Path(path).resolve()).casefold() for path in image_paths}
+        for path in chosen:
+            normalized = str(Path(path).resolve())
+            if normalized.casefold() not in known:
+                image_paths.append(path)
+                known.add(normalized.casefold())
+        refresh_list()
 
-    def choose_output() -> None:
-        chosen = filedialog.asksaveasfilename(
-            title="Save searchable PDF", defaultextension=".pdf", filetypes=[("PDF files", "*.pdf")]
-        )
-        if chosen:
-            output_var.set(chosen)
+    def clear_list() -> None:
+        image_paths.clear()
+        destination_var.set("")
+        mode_var.set("single")
+        destination_label_var.set("Output PDF (all images, one page each)")
+        language_var.set("eng")
+        status_var.set("List cleared. Add images to start again.")
+        refresh_list()
 
-    ttk.Label(frame, text="Input image").grid(row=1, column=0, sticky="w")
-    ttk.Entry(frame, textvariable=image_var, width=54).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(3, 10))
-    ttk.Button(frame, text="Browse…", command=choose_image).grid(row=2, column=2, padx=(8, 0), pady=(3, 10))
-    ttk.Label(frame, text="Output PDF").grid(row=3, column=0, sticky="w")
-    ttk.Entry(frame, textvariable=output_var, width=54).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(3, 10))
-    ttk.Button(frame, text="Save as…", command=choose_output).grid(row=4, column=2, padx=(8, 0), pady=(3, 10))
-    ttk.Label(frame, text="OCR language code (Tesseract)").grid(row=5, column=0, sticky="w")
-    ttk.Entry(frame, textvariable=language_var, width=12).grid(row=6, column=0, sticky="w", pady=(3, 14))
-    ttk.Label(frame, text="Example: eng for English; install that language in Tesseract.").grid(
-        row=6, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(3, 14)
+    def change_mode() -> None:
+        destination_var.set("")
+        if mode_var.get() == "single":
+            destination_label_var.set("Output PDF (all images, one page each)")
+        else:
+            destination_label_var.set("Output folder (one PDF per image)")
+
+    def choose_destination() -> None:
+        if mode_var.get() == "single":
+            chosen = filedialog.asksaveasfilename(
+                title="Save combined searchable PDF",
+                defaultextension=".pdf",
+                filetypes=[("PDF files", "*.pdf")],
+                initialfile="searchable-images.pdf",
+            )
+        else:
+            chosen = filedialog.askdirectory(title="Choose folder for separate PDFs", mustexist=True)
+        if chosen:
+            destination_var.set(chosen)
+
+    ttk.Button(frame, text="Add images…", command=add_images).grid(row=3, column=0, sticky="w")
+    ttk.Button(frame, text="Clear list / start over", command=clear_list).grid(row=3, column=1, sticky="w")
+    ttk.Label(frame, text="Before conversion, choose the output format").grid(
+        row=4, column=0, columnspan=3, sticky="w", pady=(14, 3)
     )
+    ttk.Radiobutton(
+        frame, text="One combined PDF (one page per image)", variable=mode_var,
+        value="single", command=change_mode,
+    ).grid(row=5, column=0, columnspan=3, sticky="w", pady=2)
+    ttk.Radiobutton(
+        frame, text="Separate PDFs (one PDF for each image)", variable=mode_var,
+        value="separate", command=change_mode,
+    ).grid(row=6, column=0, columnspan=3, sticky="w", pady=2)
+    ttk.Label(frame, textvariable=destination_label_var).grid(row=7, column=0, columnspan=3, sticky="w", pady=(10, 2))
+    ttk.Entry(frame, textvariable=destination_var).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(2, 8))
+    ttk.Button(frame, text="Browse…", command=choose_destination).grid(row=8, column=2, padx=(8, 0), pady=(2, 8))
+    ttk.Label(frame, text="OCR language code (Tesseract)").grid(row=9, column=0, sticky="w")
+    ttk.Entry(frame, textvariable=language_var, width=12).grid(row=10, column=0, sticky="w", pady=(3, 8))
+    ttk.Label(frame, text="Example: eng; for multiple languages use eng+tam and install both data files.").grid(
+        row=10, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(3, 8)
+    )
+    ttk.Label(frame, textvariable=status_var, wraplength=680).grid(row=11, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
     def convert() -> None:
-        if not image_var.get() or not output_var.get():
-            messagebox.showwarning("Choose files", "Choose an input image and output PDF first.", parent=root)
+        if not image_paths:
+            messagebox.showwarning("Choose images", "Add one or more input images first.", parent=root)
             return
+        if not destination_var.get():
+            messagebox.showwarning("Choose output destination", "Choose the output PDF or output folder first.", parent=root)
+            return
+        language = language_var.get().strip() or "eng"
         try:
-            words = convert_image(image_var.get(), output_var.get(), language=language_var.get().strip() or "eng")
+            if mode_var.get() == "single":
+                target = Path(destination_var.get())
+                if target.exists() and not messagebox.askyesno(
+                    "Replace existing PDF?", f"This file already exists:\n{target}\n\nReplace it?", parent=root
+                ):
+                    return
+                status_var.set(f"Converting {len(image_paths)} image(s) into one PDF…")
+                root.update_idletasks()
+                words = convert_images(image_paths, target, language=language)
+                output_summary = str(target)
+            else:
+                folder = Path(destination_var.get())
+                output_paths: list[Path] = []
+                used_names: set[str] = set()
+                for image_path in image_paths:
+                    stem = Path(image_path).stem
+                    candidate = f"{stem}.pdf"
+                    suffix = 2
+                    while candidate.casefold() in used_names:
+                        candidate = f"{stem} ({suffix}).pdf"
+                        suffix += 1
+                    used_names.add(candidate.casefold())
+                    output_paths.append(folder / candidate)
+                existing = [path for path in output_paths if path.exists()]
+                if existing and not messagebox.askyesno(
+                    "Replace existing PDFs?",
+                    f"{len(existing)} output file(s) already exist in this folder. Replace them?",
+                    parent=root,
+                ):
+                    return
+                words = 0
+                for index, (image_path, target) in enumerate(zip(image_paths, output_paths), start=1):
+                    status_var.set(f"Converting image {index} of {len(image_paths)}…")
+                    root.update_idletasks()
+                    words += convert_image(image_path, target, language=language)
+                output_summary = str(folder)
         except Exception as exc:
-            messagebox.showerror("Conversion failed", f"{exc}\n\nCheck that Tesseract OCR is installed and on PATH.", parent=root)
+            status_var.set("Conversion failed.")
+            messagebox.showerror(
+                "Conversion failed", f"{exc}\n\nCheck that Tesseract OCR and the selected language data are installed.", parent=root
+            )
             return
-        messagebox.showinfo("PDF created", f"Saved searchable PDF with {words} recognized words:\n{output_var.get()}", parent=root)
+        count = len(image_paths)
+        description = "one searchable PDF" if mode_var.get() == "single" else f"{count} searchable PDF(s)"
+        status_var.set(f"Finished: {count} image(s), {words} recognized words.")
+        messagebox.showinfo(
+            "PDF conversion complete",
+            f"Created {description} with {words} recognized words.\n\nSaved to:\n{output_summary}",
+            parent=root,
+        )
 
-    ttk.Button(frame, text="Convert to searchable PDF", command=convert).grid(row=7, column=0, columnspan=3, sticky="ew")
+    ttk.Button(frame, text="Convert", command=convert).grid(row=12, column=0, columnspan=3, sticky="ew", pady=(2, 0))
     root.mainloop()
 
 

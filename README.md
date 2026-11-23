@@ -24,7 +24,7 @@ pip install -e .
 searchable-pdf
 ```
 
-Choose the image, choose where to save the PDF, set the Tesseract language code, then click **Convert to searchable PDF**. The output path defaults to the same name as the image with a `.pdf` extension.
+Use **Add images…** to select one or more scans. Before converting, choose either one combined PDF (one page per image) or a separate PDF for every image. Browse to choose the output PDF path or destination folder, then click **Convert**. **Clear list / start over** removes the selected images and resets the form.
 
 ## Command line
 
