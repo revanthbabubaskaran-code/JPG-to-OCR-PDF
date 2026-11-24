@@ -6,7 +6,7 @@ This desktop app turns a scanned JPG into a PDF that looks like the original and
 
 - Python 3.10 or newer
 - Tesseract OCR installed on Windows, with English language data
-- Tesseract language data for each language you want to recognize (English is `eng`)
+- Tesseract language data for each language you want to recognize. Automatic script detection is the default; English is `eng`.
 
 Install Tesseract for Windows from the [UB Mannheim Tesseract builds](https://github.com/UB-Mannheim/tesseract/wiki). During installation, include the needed language data. The launcher detects the usual `C:\Program Files\Tesseract-OCR` location automatically. If you installed it elsewhere, add its folder to `PATH`.
 
@@ -36,16 +36,16 @@ If conversion fails, the error details appear in a selectable window with a **Co
 ## Command line
 
 ```powershell
-searchable-pdf "C:\Scans\certificate.jpg" "C:\Scans\certificate-searchable.pdf" --lang eng
+searchable-pdf "C:\Scans\certificate.jpg" "C:\Scans\certificate-searchable.pdf" --lang auto
 ```
 
 To create a stamping-input transcription instead, add `--format stamping`:
 
 ```powershell
-searchable-pdf "C:\Scans\certificate.jpg" "C:\Scans\certificate-transcription.pdf" --lang eng --format stamping
+searchable-pdf "C:\Scans\certificate.jpg" "C:\Scans\certificate-transcription.pdf" --lang auto --format stamping
 ```
 
-Supported image formats include JPG, PNG, TIFF, and BMP. The image is scaled proportionally to fit an A4-sized page. To check whether OCR worked, open the PDF and try selecting or searching for a word. OCR quality depends on image clarity, orientation, language data, and document layout; proofread important text.
+Supported image formats include JPG, PNG, TIFF, and BMP. The image is scaled proportionally to fit an A4-sized page. OCR language defaults to **auto**, which detects the page's dominant script and selects a matching installed Tesseract language (for example, Latin to `eng` or Tamil to `tam`). Enter a language code manually, such as `eng+tam`, when a page mixes languages. To check whether OCR worked, open the PDF and try selecting or searching for a word. OCR quality depends on image clarity, orientation, language data, and document layout; proofread important text.
 
 ## Notes
 

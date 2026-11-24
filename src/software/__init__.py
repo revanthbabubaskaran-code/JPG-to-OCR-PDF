@@ -22,6 +22,47 @@ def _configure_tesseract(pytesseract) -> None:
                 return
 
 
+def _resolve_ocr_language(image, language: str, pytesseract) -> str:
+    """Choose a Tesseract language from the detected script when language is auto."""
+    requested = (language or "auto").strip()
+    if requested.casefold() not in {"auto", "detect", "automatic"}:
+        return requested
+    try:
+        available = set(pytesseract.get_languages(config="")) - {"osd"}
+    except Exception:
+        available = set()
+    script_languages = {
+        "Latin": "eng", "Tamil": "tam", "Devanagari": "hin", "Arabic": "ara",
+        "Cyrillic": "rus", "Greek": "ell", "Hebrew": "heb", "Bengali": "ben",
+        "Gujarati": "guj", "Gurmukhi": "pan", "Kannada": "kan", "Malayalam": "mal",
+        "Oriya": "ori", "Telugu": "tel", "Thai": "tha", "Japanese": "jpn",
+        "Korean": "kor", "Han": "chi_sim",
+    }
+    detected_language = ""
+    try:
+        orientation = pytesseract.image_to_osd(image, config="--psm 0", output_type=pytesseract.Output.DICT)
+        try:
+            script_confidence = float(orientation.get("script_conf", 0))
+        except (TypeError, ValueError):
+            script_confidence = 0
+        # OSD sometimes mistakes logos or low-resolution decorative text for
+        # a different alphabet. Ignore weak script predictions.
+        if script_confidence >= 5:
+            detected_language = script_languages.get(str(orientation.get("script", "")).strip(), "")
+    except Exception:
+        pass
+    if detected_language and (not available or detected_language in available):
+        return detected_language
+    if "eng" in available or not available:
+        return "eng"
+    if len(available) == 1:
+        return next(iter(available))
+    raise RuntimeError(
+        "Automatic OCR detection could not find a matching installed Tesseract language. "
+        "Install the language data or enter its code manually."
+    )
+
+
 def _add_image_page(pdf, image_path: str | Path, language: str) -> int:
     """Add one image and its invisible OCR layer to an existing PDF canvas."""
     try:
@@ -40,6 +81,7 @@ def _add_image_page(pdf, image_path: str | Path, language: str) -> int:
     _configure_tesseract(pytesseract)
     with Image.open(source) as opened:
         image = ImageOps.exif_transpose(opened).convert("RGB")
+    language = _resolve_ocr_language(image, language, pytesseract)
     # OCR is run on the same pixels that are shown in the PDF, so the word boxes
     # line up with the page image without a second coordinate transform.
     try:
@@ -116,7 +158,7 @@ def _add_image_page(pdf, image_path: str | Path, language: str) -> int:
     return count
 
 
-def convert_images(image_paths: list[str | Path], output_path: str | Path, language: str = "eng") -> int:
+def convert_images(image_paths: list[str | Path], output_path: str | Path, language: str = "auto") -> int:
     """Create one multi-page searchable PDF from one or more images.
 
     Returns the total number of OCR words placed across all pages.
@@ -153,7 +195,7 @@ def convert_images(image_paths: list[str | Path], output_path: str | Path, langu
         raise
 
 
-def convert_image(image_path: str | Path, output_path: str | Path, language: str = "eng") -> int:
+def convert_image(image_path: str | Path, output_path: str | Path, language: str = "auto") -> int:
     """Create a searchable PDF from one image. Returns its recognized word count."""
     return convert_images([image_path], output_path, language=language)
 
@@ -184,6 +226,7 @@ def _transcription_record(
         image = ImageOps.exif_transpose(opened).convert("RGB")
     if image.width > image.height:
         image = image.rotate(90, expand=True)
+    language = _resolve_ocr_language(image, language, pytesseract)
     width, height = image.size
 
     def crop_ocr(box: tuple[float, float, float, float], scale: int, psm: int, enhance: bool = True) -> str:
@@ -412,7 +455,7 @@ def _run_gui() -> None:
     image_paths: list[str] = []
     destination_var = tk.StringVar()
     output_name_var = tk.StringVar()
-    language_var = tk.StringVar(value="eng")
+    language_var = tk.StringVar(value="auto")
     mode_var = tk.StringVar(value="single")
     format_var = tk.StringVar(value="ocr")
     count_var = tk.StringVar(value="No images selected")
@@ -456,7 +499,7 @@ def _run_gui() -> None:
         output_name_var.set("")
         mode_var.set("single")
         format_var.set("ocr")
-        language_var.set("eng")
+        language_var.set("auto")
         status_var.set("List cleared. Add images to start again.")
         refresh_list()
 
@@ -547,9 +590,9 @@ def _run_gui() -> None:
     ttk.Label(frame, text="Output folder").grid(row=12, column=0, columnspan=3, sticky="w")
     ttk.Entry(frame, textvariable=destination_var).grid(row=13, column=0, columnspan=2, sticky="ew", pady=(2, 8))
     ttk.Button(frame, text="Browse…", command=choose_destination).grid(row=13, column=2, padx=(8, 0), pady=(2, 8))
-    ttk.Label(frame, text="OCR language code (Tesseract)").grid(row=14, column=0, sticky="w")
+    ttk.Label(frame, text="OCR language (auto-detected by default)").grid(row=14, column=0, sticky="w")
     ttk.Entry(frame, textvariable=language_var, width=12).grid(row=15, column=0, sticky="w", pady=(3, 8))
-    ttk.Label(frame, text="Example: eng; for multiple languages use eng+tam and install both data files.").grid(
+    ttk.Label(frame, text="Auto detects the page script. Or enter codes such as eng or eng+tam; install their Tesseract data files.").grid(
         row=15, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(3, 8)
     )
     ttk.Label(frame, textvariable=status_var, wraplength=680).grid(row=16, column=0, columnspan=3, sticky="w", pady=(0, 8))
@@ -639,7 +682,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Create an OCR PDF or stamping-input transcription from an image.")
     parser.add_argument("image", nargs="?", help="Input JPG/PNG/TIFF/BMP image; omit to open the desktop app")
     parser.add_argument("output", nargs="?", help="Output PDF path")
-    parser.add_argument("--lang", default="eng", help="Tesseract language code (default: eng)")
+    parser.add_argument("--lang", default="auto", help="Tesseract language code or auto (default: auto-detect script)")
     parser.add_argument(
         "--format", choices=("ocr", "stamping"), default="ocr",
         help="PDF format: image-faithful searchable OCR (default) or stamping-input transcription",
