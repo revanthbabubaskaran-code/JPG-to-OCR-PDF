@@ -24,12 +24,23 @@ pip install -e .
 searchable-pdf
 ```
 
-Use **Add images…** to select one or more scans. Before converting, choose either one combined PDF (one page per image) or a separate PDF for every image. Enter a PDF name and choose the output folder. Combined mode saves as `<name>.pdf`; separate mode saves as `<name>_001.pdf`, `<name>_002.pdf`, and so on. **Clear list / start over** removes the selected images and resets the form.
+Use **Add images…** to select one or more scans. Choose whether to save one combined PDF (one page per image) or a separate PDF for every image, then select the PDF format:
+
+- **Regular OCR PDF** keeps the original scan visible and adds selectable/searchable OCR text.
+- **Stamping input transcription** creates a black and white data-entry PDF with a structured machine table that the stamping application can read. It is visibly marked as a transcription, not an official certificate. OCR may misread identifiers and measurements; verify every value against the original before using it. This format currently expects one certificate with one machine per image.
+
+Enter a PDF name and choose the output folder. Combined mode saves as `<name>.pdf`; separate mode saves as `<name>_001.pdf`, `<name>_002.pdf`, and so on. **Clear list / start over** removes the selected images and resets the form.
 
 ## Command line
 
 ```powershell
 searchable-pdf "C:\Scans\certificate.jpg" "C:\Scans\certificate-searchable.pdf" --lang eng
+```
+
+To create a stamping-input transcription instead, add `--format stamping`:
+
+```powershell
+searchable-pdf "C:\Scans\certificate.jpg" "C:\Scans\certificate-transcription.pdf" --lang eng --format stamping
 ```
 
 Supported image formats include JPG, PNG, TIFF, and BMP. The image is scaled proportionally to fit an A4-sized page. To check whether OCR worked, open the PDF and try selecting or searching for a word. OCR quality depends on image clarity, orientation, language data, and document layout; proofread important text.
