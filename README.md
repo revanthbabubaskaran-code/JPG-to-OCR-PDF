@@ -27,7 +27,7 @@ searchable-pdf
 Use **Add images…** to select one or more scans. Choose whether to save one combined PDF (one page per image) or a separate PDF for every image, then select the PDF format:
 
 - **Regular OCR PDF** keeps the original scan visible and adds selectable/searchable OCR text.
-- **Stamping input transcription** creates a black and white data-entry PDF with a structured machine table that the stamping application can read. It is visibly marked as a transcription, not an official certificate. If OCR cannot read a required field, the app asks you to type it from the source image rather than guessing. Verify every value before using it. This format currently expects one certificate with one machine per image.
+- **Stamping input transcription** creates a black and white data-entry PDF with a structured machine table that the stamping application can read. Fee details are omitted because they are not requested by the new application. It is visibly marked as a transcription, not an official certificate. If OCR cannot read a required field, the app asks you to type it from the source image rather than guessing. Verify every value before using it. This format currently expects one certificate with one machine per image.
 
 Enter a PDF name and choose the output folder. Combined mode saves as `<name>.pdf`; separate mode saves as `<name>_001.pdf`, `<name>_002.pdf`, and so on. **Clear list / start over** removes the selected images and resets the form.
 

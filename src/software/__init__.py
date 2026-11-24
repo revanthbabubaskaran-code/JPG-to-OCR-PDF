@@ -201,7 +201,6 @@ def _transcription_record(
         trader_crop = crop_ocr((0.66, 0.12, 0.92, 0.16), 4, 6)
         body = crop_ocr((0.05, 0.31, 0.95, 0.43), 2, 6)
         table = crop_ocr((0.05, 0.39, 0.95, 0.62), 2, 6)
-        fee_crop = crop_ocr((0.71, 0.46, 0.86, 0.52), 4, 6)
         type_cell = crop_ocr((0.59, 0.45, 0.65, 0.59), 6, 6)
         full_text = pytesseract.image_to_string(image, lang=language, config="--psm 3")
     except pytesseract.TesseractNotFoundError as exc:
@@ -270,13 +269,6 @@ def _transcription_record(
         instrument_description = f"Non-Automatic Weighing Instruments - Mechanical (analogue) Class {class_value or 'III'} and IIII"
     else:
         instrument_description = f"Non-Automatic Weighing Instruments - Class {class_value or 'III'}"
-    fee_text = fee_crop + "\n" + table_text
-    additional_fee_match = re.search(
-        r"50\s*%\s*(?:Additional|Addl\w*)\s*Fee\s*[:.]?\s*(\d+(?:[.,]\d{1,2})?)",
-        fee_text,
-        re.I | re.S,
-    )
-    stamping_fee_match = re.search(r"Stamping\s*Fee\s*[:.]?\s*(\d+(?:[.,]\d{1,2})?)", fee_text, re.I | re.S)
     stamping_place = "Site" if re.search(r"Stamping\s+at\s+Site", header_text, re.I) else (
         "Office" if re.search(r"Stamping\s+at\s+Office", header_text, re.I) else ""
     )
@@ -296,8 +288,6 @@ def _transcription_record(
         "interval": f"{interval_match.group(1).replace(',', '.')} {interval_match.group(2).lower()}" if interval_match else "",
         "class": class_value,
         "description": instrument_description,
-        "additional_fee": additional_fee_match.group(1).replace(",", ".") if additional_fee_match else "",
-        "stamping_fee": stamping_fee_match.group(1).replace(",", ".") if stamping_fee_match else "",
         "denomination": f"Weights: {max_match.group(1).replace(',', '.')} {max_match.group(2).lower()}" if max_match else "",
     }
     if overrides:
@@ -305,7 +295,6 @@ def _transcription_record(
     required = (
         "cv", "date", "application", "trader", "stamping_place", "business_name", "address",
         "machine", "make", "model", "max", "min", "interval", "denomination", "class",
-        "additional_fee", "stamping_fee",
     )
     missing = [field for field in required if not record[field]]
     if missing:
@@ -314,7 +303,7 @@ def _transcription_record(
             "stamping_place": "stamping location", "business_name": "business name", "address": "address",
             "machine": "machine number", "make": "make", "model": "model", "max": "maximum capacity",
             "min": "minimum capacity", "interval": "verification interval", "denomination": "denomination",
-            "class": "instrument class", "additional_fee": "additional fee", "stamping_fee": "stamping fee",
+            "class": "instrument class",
         }
         missing_labels = ", ".join(labels[field] for field in missing)
         raise _UnreadableCertificateFields(source, record, [labels[field] for field in missing])
@@ -387,14 +376,13 @@ def _build_stamping_pdf(
             metadata_table = Table(metadata, colWidths=[32*mm, 50*mm, 40*mm, 58*mm])
             metadata_table.setStyle(TableStyle([("GRID",(0,0),(-1,-1),.5,colors.black),("VALIGN",(0,0),(-1,-1),"TOP"),("BACKGROUND",(0,0),(0,-1),colors.whitesmoke),("BACKGROUND",(2,0),(2,-1),colors.whitesmoke),("LEFTPADDING",(0,0),(-1,-1),5),("RIGHTPADDING",(0,0),(-1,-1),5),("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4)]))
             story += [metadata_table, Paragraph("Business and address", styles["TransSection"]), p(f"Record belonging to M/S {record['business_name']}, Locality {record['address']}"), Spacer(1,3)]
-            headers = ["Items", "Quantity", "Denomination", "Measures", "Capacity", "Class", "Manufacturer", "Type / Model", "Machine identifier", "Verification Fee"]
+            headers = ["Items", "Quantity", "Denomination", "Measures", "Capacity", "Class", "Manufacturer", "Type / Model", "Machine identifier"]
             values = [
                 record["description"], "1", record["denomination"], "-", "-", record["class"],
                 f"Make: {record['make']}<br/>Max: {record['max']}<br/>Min: {record['min']}<br/>e/d: {record['interval']}",
                 f"Model: {record['model']}", f"Machine No.: {record['machine']}",
-                f"Stamping Fee: {record['stamping_fee'] or 'verify source'}<br/>50% Additional Fee: {record['additional_fee'] or 'verify source'}",
             ]
-            widths = [25,12,20,12,17,10,27,17,18,22]
+            widths = [28,13,23,13,19,12,30,20,22]
             machine_table = Table([[p(value,"TransTableHead") for value in headers],[p(value,"TransTableCell") for value in values]], colWidths=[value*mm for value in widths], repeatRows=1)
             machine_table.setStyle(TableStyle([("GRID",(0,0),(-1,-1),.55,colors.black),("VALIGN",(0,0),(-1,-1),"TOP"),("BACKGROUND",(0,0),(-1,0),colors.whitesmoke),("LEFTPADDING",(0,0),(-1,-1),2),("RIGHTPADDING",(0,0),(-1,-1),2),("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4)]))
             story += [machine_table, Spacer(1,6), p("This transcription is for data entry and review only. It does not replace, certify, or reproduce the original record.", "TransSmall")]
@@ -519,8 +507,7 @@ def _run_gui() -> None:
             "trader number": "trader", "stamping location": "stamping_place", "business name": "business_name",
             "address": "address", "machine number": "machine", "make": "make", "model": "model",
             "maximum capacity": "max", "minimum capacity": "min", "verification interval": "interval",
-            "denomination": "denomination", "instrument class": "class", "additional fee": "additional_fee",
-            "stamping fee": "stamping_fee",
+            "denomination": "denomination", "instrument class": "class",
         }
         corrections = {}
         for label in error.missing:
