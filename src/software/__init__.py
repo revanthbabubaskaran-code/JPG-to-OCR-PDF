@@ -198,7 +198,6 @@ def _transcription_record(
     try:
         header = crop_ocr((0.62, 0.06, 0.98, 0.24), 3, 6)
         date_crop = crop_ocr((0.664, 0.103, 0.907, 0.134), 4, 6, enhance=False)
-        trader_crop = crop_ocr((0.66, 0.12, 0.92, 0.16), 4, 6)
         body = crop_ocr((0.05, 0.31, 0.95, 0.43), 2, 6)
         table = crop_ocr((0.05, 0.39, 0.95, 0.62), 2, 6)
         type_cell = crop_ocr((0.59, 0.45, 0.65, 0.59), 6, 6)
@@ -233,7 +232,6 @@ def _transcription_record(
             cv_date = f"{day:02d}-{month:02d}-{year}"
 
     application = re.search(r"Application\s+Number\s*[:.]?\s*(\d{6,9})", header_text, re.I)
-    trader = re.search(r"LABUID\s*/\s*TNLM\s*/\s*(\d{6,9})", trader_crop + "\n" + header_text, re.I)
     location = re.search(r"Locality\s*[:.]?\s*(.+?\b\d{6}\b)", body + "\n" + full_text, re.I | re.S)
     business_name = re.search(r"\bM\s*/\s*S\s+(.+?)\s*,\s*Locality\b", body + "\n" + full_text, re.I | re.S)
     if not business_name:
@@ -276,7 +274,6 @@ def _transcription_record(
         "cv": cv_number,
         "date": cv_date,
         "application": application.group(1) if application else "",
-        "trader": trader.group(1) if trader else "",
         "stamping_place": stamping_place,
         "business_name": re.sub(r"\s+", " ", business_name.group(1)).strip(" ,") if business_name else "",
         "address": re.sub(r"\s+", " ", location.group(1)).strip(" ,") if location else "",
@@ -293,13 +290,13 @@ def _transcription_record(
     if overrides:
         record.update({key: value.strip() for key, value in overrides.items() if key in record})
     required = (
-        "cv", "date", "application", "trader", "stamping_place", "business_name", "address",
+        "cv", "date", "application", "stamping_place", "business_name", "address",
         "machine", "make", "model", "max", "min", "interval", "denomination", "class",
     )
     missing = [field for field in required if not record[field]]
     if missing:
         labels = {
-            "cv": "CV number", "date": "CV date", "application": "application number", "trader": "trader number",
+            "cv": "CV number", "date": "CV date", "application": "application number",
             "stamping_place": "stamping location", "business_name": "business name", "address": "address",
             "machine": "machine number", "make": "make", "model": "model", "max": "maximum capacity",
             "min": "minimum capacity", "interval": "verification interval", "denomination": "denomination",
@@ -365,13 +362,13 @@ def _build_stamping_pdf(
                 Paragraph("CERTIFICATE DATA TRANSCRIPTION", styles["TransTitle"]),
                 Paragraph("FOR SOFTWARE DATA ENTRY - NOT AN OFFICIAL CERTIFICATE", styles["TransSub"]),
                 p(f"Record {index} of {len(records)}. OCR transcription from the selected image. Verify every value against the source before submission.", "TransSmall"),
-                p(f"Stamping at {record['stamping_place']}<br/>CV No.: {record['cv']}<br/>Date: {record['date']}<br/>Application Number: {record['application']}<br/>Trader No.:<br/>{record['trader']}", "TransLine"),
+                p(f"Stamping at {record['stamping_place']}<br/>CV No.: {record['cv']}<br/>Date: {record['date']}<br/>Application Number: {record['application']}", "TransLine"),
                 Paragraph("Previous certificate and application identifiers", styles["TransSection"]),
             ]
             metadata = [
                 [p("Previous CV number", "TransLabel"), p(record["cv"]), p("Previous CV date", "TransLabel"), p(record["date"])],
-                [p("Application number", "TransLabel"), p(record["application"]), p("Trader / establishment number", "TransLabel"), p(record["trader"])],
-                [p("Stamping at", "TransLabel"), p(record["stamping_place"]), p("Source image", "TransLabel"), p(f"{index} of {len(records)}")],
+                [p("Application number", "TransLabel"), p(record["application"]), p("Source image", "TransLabel"), p(f"{index} of {len(records)}")],
+                [p("Stamping at", "TransLabel"), p(record["stamping_place"]), p("Machine rows", "TransLabel"), p("1")],
             ]
             metadata_table = Table(metadata, colWidths=[32*mm, 50*mm, 40*mm, 58*mm])
             metadata_table.setStyle(TableStyle([("GRID",(0,0),(-1,-1),.5,colors.black),("VALIGN",(0,0),(-1,-1),"TOP"),("BACKGROUND",(0,0),(0,-1),colors.whitesmoke),("BACKGROUND",(2,0),(2,-1),colors.whitesmoke),("LEFTPADDING",(0,0),(-1,-1),5),("RIGHTPADDING",(0,0),(-1,-1),5),("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4)]))
@@ -504,7 +501,7 @@ def _run_gui() -> None:
     def ask_for_unreadable_fields(error: _UnreadableCertificateFields) -> dict[str, str] | None:
         key_for_label = {
             "CV number": "cv", "CV date": "date", "application number": "application",
-            "trader number": "trader", "stamping location": "stamping_place", "business name": "business_name",
+            "stamping location": "stamping_place", "business name": "business_name",
             "address": "address", "machine number": "machine", "make": "make", "model": "model",
             "maximum capacity": "max", "minimum capacity": "min", "verification interval": "interval",
             "denomination": "denomination", "instrument class": "class",
