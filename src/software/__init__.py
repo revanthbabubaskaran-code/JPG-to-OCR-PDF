@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -160,7 +161,7 @@ def _run_gui() -> None:
 
     root = tk.Tk()
     root.title("Searchable JPG to PDF")
-    root.minsize(780, 590)
+    root.minsize(780, 650)
     frame = ttk.Frame(root, padding=18)
     frame.grid(sticky="nsew")
     root.columnconfigure(0, weight=1)
@@ -172,9 +173,9 @@ def _run_gui() -> None:
     )
     image_paths: list[str] = []
     destination_var = tk.StringVar()
+    output_name_var = tk.StringVar()
     language_var = tk.StringVar(value="eng")
     mode_var = tk.StringVar(value="single")
-    destination_label_var = tk.StringVar(value="Output PDF")
     count_var = tk.StringVar(value="No images selected")
     status_var = tk.StringVar(value="Add one or more JPG images to begin.")
 
@@ -213,29 +214,14 @@ def _run_gui() -> None:
     def clear_list() -> None:
         image_paths.clear()
         destination_var.set("")
+        output_name_var.set("")
         mode_var.set("single")
-        destination_label_var.set("Output PDF (all images, one page each)")
         language_var.set("eng")
         status_var.set("List cleared. Add images to start again.")
         refresh_list()
 
-    def change_mode() -> None:
-        destination_var.set("")
-        if mode_var.get() == "single":
-            destination_label_var.set("Output PDF (all images, one page each)")
-        else:
-            destination_label_var.set("Output folder (one PDF per image)")
-
     def choose_destination() -> None:
-        if mode_var.get() == "single":
-            chosen = filedialog.asksaveasfilename(
-                title="Save combined searchable PDF",
-                defaultextension=".pdf",
-                filetypes=[("PDF files", "*.pdf")],
-                initialfile="searchable-images.pdf",
-            )
-        else:
-            chosen = filedialog.askdirectory(title="Choose folder for separate PDFs", mustexist=True)
+        chosen = filedialog.askdirectory(title="Choose the PDF output folder", mustexist=True)
         if chosen:
             destination_var.set(chosen)
 
@@ -246,33 +232,53 @@ def _run_gui() -> None:
     )
     ttk.Radiobutton(
         frame, text="One combined PDF (one page per image)", variable=mode_var,
-        value="single", command=change_mode,
+        value="single",
     ).grid(row=5, column=0, columnspan=3, sticky="w", pady=2)
     ttk.Radiobutton(
         frame, text="Separate PDFs (one PDF for each image)", variable=mode_var,
-        value="separate", command=change_mode,
+        value="separate",
     ).grid(row=6, column=0, columnspan=3, sticky="w", pady=2)
-    ttk.Label(frame, textvariable=destination_label_var).grid(row=7, column=0, columnspan=3, sticky="w", pady=(10, 2))
-    ttk.Entry(frame, textvariable=destination_var).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(2, 8))
-    ttk.Button(frame, text="Browse…", command=choose_destination).grid(row=8, column=2, padx=(8, 0), pady=(2, 8))
-    ttk.Label(frame, text="OCR language code (Tesseract)").grid(row=9, column=0, sticky="w")
-    ttk.Entry(frame, textvariable=language_var, width=12).grid(row=10, column=0, sticky="w", pady=(3, 8))
-    ttk.Label(frame, text="Example: eng; for multiple languages use eng+tam and install both data files.").grid(
-        row=10, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(3, 8)
+    ttk.Label(frame, text="PDF name (you can enter it with or without .pdf)").grid(
+        row=7, column=0, columnspan=3, sticky="w", pady=(10, 2)
     )
-    ttk.Label(frame, textvariable=status_var, wraplength=680).grid(row=11, column=0, columnspan=3, sticky="w", pady=(0, 8))
+    ttk.Entry(frame, textvariable=output_name_var).grid(row=8, column=0, columnspan=3, sticky="ew", pady=(2, 8))
+    ttk.Label(frame, text="Output folder").grid(row=9, column=0, columnspan=3, sticky="w")
+    ttk.Entry(frame, textvariable=destination_var).grid(row=10, column=0, columnspan=2, sticky="ew", pady=(2, 8))
+    ttk.Button(frame, text="Browse…", command=choose_destination).grid(row=10, column=2, padx=(8, 0), pady=(2, 8))
+    ttk.Label(frame, text="OCR language code (Tesseract)").grid(row=11, column=0, sticky="w")
+    ttk.Entry(frame, textvariable=language_var, width=12).grid(row=12, column=0, sticky="w", pady=(3, 8))
+    ttk.Label(frame, text="Example: eng; for multiple languages use eng+tam and install both data files.").grid(
+        row=12, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(3, 8)
+    )
+    ttk.Label(frame, textvariable=status_var, wraplength=680).grid(row=13, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
     def convert() -> None:
         if not image_paths:
             messagebox.showwarning("Choose images", "Add one or more input images first.", parent=root)
             return
         if not destination_var.get():
-            messagebox.showwarning("Choose output destination", "Choose the output PDF or output folder first.", parent=root)
+            messagebox.showwarning("Choose output folder", "Choose the folder where the PDF file(s) should be saved.", parent=root)
+            return
+        entered_name = output_name_var.get().strip()
+        if entered_name.lower().endswith(".pdf"):
+            entered_name = entered_name[:-4].rstrip()
+        if not entered_name:
+            messagebox.showwarning("Enter a PDF name", "Enter a name for the output PDF file(s).", parent=root)
+            return
+        if any(char in entered_name for char in '<>:"/\\|?*') or entered_name.endswith((" ", ".")):
+            messagebox.showwarning(
+                "Invalid PDF name", "Use a file name without folder paths or Windows-invalid characters.", parent=root
+            )
+            return
+        device_name = entered_name.split(".", 1)[0]
+        if re.fullmatch(r"(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])", device_name):
+            messagebox.showwarning("Invalid PDF name", "Choose a different name; Windows reserves that file name.", parent=root)
             return
         language = language_var.get().strip() or "eng"
+        folder = Path(destination_var.get())
         try:
             if mode_var.get() == "single":
-                target = Path(destination_var.get())
+                target = folder / f"{entered_name}.pdf"
                 if target.exists() and not messagebox.askyesno(
                     "Replace existing PDF?", f"This file already exists:\n{target}\n\nReplace it?", parent=root
                 ):
@@ -282,18 +288,7 @@ def _run_gui() -> None:
                 words = convert_images(image_paths, target, language=language)
                 output_summary = str(target)
             else:
-                folder = Path(destination_var.get())
-                output_paths: list[Path] = []
-                used_names: set[str] = set()
-                for image_path in image_paths:
-                    stem = Path(image_path).stem
-                    candidate = f"{stem}.pdf"
-                    suffix = 2
-                    while candidate.casefold() in used_names:
-                        candidate = f"{stem} ({suffix}).pdf"
-                        suffix += 1
-                    used_names.add(candidate.casefold())
-                    output_paths.append(folder / candidate)
+                output_paths = [folder / f"{entered_name}_{index:03d}.pdf" for index in range(1, len(image_paths) + 1)]
                 existing = [path for path in output_paths if path.exists()]
                 if existing and not messagebox.askyesno(
                     "Replace existing PDFs?",
@@ -322,7 +317,7 @@ def _run_gui() -> None:
             parent=root,
         )
 
-    ttk.Button(frame, text="Convert", command=convert).grid(row=12, column=0, columnspan=3, sticky="ew", pady=(2, 0))
+    ttk.Button(frame, text="Convert", command=convert).grid(row=14, column=0, columnspan=3, sticky="ew", pady=(2, 0))
     root.mainloop()
 
 
@@ -345,4 +340,4 @@ def main() -> None:
     print(f"Created {args.output} with {words} searchable words.")
 
 
-__all__ = ["convert_image", "main"]
+__all__ = ["convert_image", "convert_images", "main"]

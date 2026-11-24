@@ -24,7 +24,7 @@ pip install -e .
 searchable-pdf
 ```
 
-Use **Add images…** to select one or more scans. Before converting, choose either one combined PDF (one page per image) or a separate PDF for every image. Browse to choose the output PDF path or destination folder, then click **Convert**. **Clear list / start over** removes the selected images and resets the form.
+Use **Add images…** to select one or more scans. Before converting, choose either one combined PDF (one page per image) or a separate PDF for every image. Enter a PDF name and choose the output folder. Combined mode saves as `<name>.pdf`; separate mode saves as `<name>_001.pdf`, `<name>_002.pdf`, and so on. **Clear list / start over** removes the selected images and resets the form.
 
 ## Command line
 
