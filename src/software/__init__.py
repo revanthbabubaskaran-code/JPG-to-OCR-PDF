@@ -158,7 +158,17 @@ def convert_image(image_path: str | Path, output_path: str | Path, language: str
     return convert_images([image_path], output_path, language=language)
 
 
-def _transcription_record(image_path: str | Path, language: str) -> dict[str, str]:
+class _UnreadableCertificateFields(ValueError):
+    def __init__(self, source: Path, record: dict[str, str], missing: list[str]):
+        self.source = source
+        self.record = record
+        self.missing = missing
+        super().__init__(f"Could not reliably read {', '.join(missing)} from {source.name}.")
+
+
+def _transcription_record(
+    image_path: str | Path, language: str, overrides: dict[str, str] | None = None
+) -> dict[str, str]:
     """Read one photographed Tamil Nadu verification certificate for data entry."""
     try:
         from PIL import Image, ImageEnhance, ImageOps
@@ -176,18 +186,22 @@ def _transcription_record(image_path: str | Path, language: str) -> dict[str, st
         image = image.rotate(90, expand=True)
     width, height = image.size
 
-    def crop_ocr(box: tuple[float, float, float, float], scale: int, psm: int) -> str:
+    def crop_ocr(box: tuple[float, float, float, float], scale: int, psm: int, enhance: bool = True) -> str:
         left, top, right, bottom = box
         crop = image.crop((int(width * left), int(height * top), int(width * right), int(height * bottom)))
         crop = ImageOps.autocontrast(crop.convert("L"))
-        crop = ImageEnhance.Contrast(crop).enhance(1.25)
+        if enhance:
+            crop = ImageEnhance.Contrast(crop).enhance(1.25)
         crop = crop.resize((crop.width * scale, crop.height * scale))
         return pytesseract.image_to_string(crop, lang=language, config=f"--psm {psm}")
 
     try:
         header = crop_ocr((0.62, 0.06, 0.98, 0.24), 3, 6)
+        date_crop = crop_ocr((0.664, 0.103, 0.907, 0.134), 4, 6, enhance=False)
+        trader_crop = crop_ocr((0.66, 0.12, 0.92, 0.16), 4, 6)
         body = crop_ocr((0.05, 0.31, 0.95, 0.43), 2, 6)
         table = crop_ocr((0.05, 0.39, 0.95, 0.62), 2, 6)
+        fee_crop = crop_ocr((0.71, 0.46, 0.86, 0.52), 4, 6)
         type_cell = crop_ocr((0.59, 0.45, 0.65, 0.59), 6, 6)
         full_text = pytesseract.image_to_string(image, lang=language, config="--psm 3")
     except pytesseract.TesseractNotFoundError as exc:
@@ -210,7 +224,7 @@ def _transcription_record(image_path: str | Path, language: str) -> dict[str, st
 
     date_match = re.search(
         r"\bDate\s*[:.]?\s*(\d{1,2})\s*[-/]\s*(\d{1,2})\s*[-/]\s*(20\d{2})\b",
-        header_text,
+        date_crop + "\n" + header_text,
         re.I,
     )
     cv_date = ""
@@ -220,7 +234,7 @@ def _transcription_record(image_path: str | Path, language: str) -> dict[str, st
             cv_date = f"{day:02d}-{month:02d}-{year}"
 
     application = re.search(r"Application\s+Number\s*[:.]?\s*(\d{6,9})", header_text, re.I)
-    trader = re.search(r"LABUID\s*/\s*TNLM\s*/\s*(\d{6,9})", header_text, re.I)
+    trader = re.search(r"LABUID\s*/\s*TNLM\s*/\s*(\d{6,9})", trader_crop + "\n" + header_text, re.I)
     location = re.search(r"Locality\s*[:.]?\s*(.+?\b\d{6}\b)", body + "\n" + full_text, re.I | re.S)
     business_name = re.search(r"\bM\s*/\s*S\s+(.+?)\s*,\s*Locality\b", body + "\n" + full_text, re.I | re.S)
     if not business_name:
@@ -256,8 +270,13 @@ def _transcription_record(image_path: str | Path, language: str) -> dict[str, st
         instrument_description = f"Non-Automatic Weighing Instruments - Mechanical (analogue) Class {class_value or 'III'} and IIII"
     else:
         instrument_description = f"Non-Automatic Weighing Instruments - Class {class_value or 'III'}"
-    additional_fee_match = re.search(r"50\s*%\s*(?:Additional|Addl\w*)\s*Fee\s*[:.]?\s*(\d+(?:[.,]\d{1,2})?)", table_text, re.I)
-    stamping_fee_match = re.search(r"Stamping\s*Fee\s*[:.]?\s*(\d+(?:[.,]\d{1,2})?)", table_text, re.I)
+    fee_text = fee_crop + "\n" + table_text
+    additional_fee_match = re.search(
+        r"50\s*%\s*(?:Additional|Addl\w*)\s*Fee\s*[:.]?\s*(\d+(?:[.,]\d{1,2})?)",
+        fee_text,
+        re.I | re.S,
+    )
+    stamping_fee_match = re.search(r"Stamping\s*Fee\s*[:.]?\s*(\d+(?:[.,]\d{1,2})?)", fee_text, re.I | re.S)
     stamping_place = "Site" if re.search(r"Stamping\s+at\s+Site", header_text, re.I) else (
         "Office" if re.search(r"Stamping\s+at\s+Office", header_text, re.I) else ""
     )
@@ -281,6 +300,8 @@ def _transcription_record(image_path: str | Path, language: str) -> dict[str, st
         "stamping_fee": stamping_fee_match.group(1).replace(",", ".") if stamping_fee_match else "",
         "denomination": f"Weights: {max_match.group(1).replace(',', '.')} {max_match.group(2).lower()}" if max_match else "",
     }
+    if overrides:
+        record.update({key: value.strip() for key, value in overrides.items() if key in record})
     required = (
         "cv", "date", "application", "trader", "stamping_place", "business_name", "address",
         "machine", "make", "model", "max", "min", "interval", "denomination", "class",
@@ -296,13 +317,16 @@ def _transcription_record(image_path: str | Path, language: str) -> dict[str, st
             "class": "instrument class", "additional_fee": "additional fee", "stamping_fee": "stamping fee",
         }
         missing_labels = ", ".join(labels[field] for field in missing)
-        raise ValueError(f"Could not reliably read {missing_labels} from {source.name}. Choose Regular OCR PDF or use a clearer, upright certificate image.")
+        raise _UnreadableCertificateFields(source, record, [labels[field] for field in missing])
     if len(machine_numbers) != 1:
         raise ValueError(f"Expected one machine record in {source.name}; found {len(machine_numbers)} machine numbers. Use one certificate per image.")
     return record
 
 
-def _build_stamping_pdf(image_paths: list[str | Path], output_path: str | Path, language: str) -> int:
+def _build_stamping_pdf(
+    image_paths: list[str | Path], output_path: str | Path, language: str,
+    on_unreadable=None,
+) -> int:
     """Create an app-readable data transcription, visibly marked as non-official."""
     try:
         from reportlab.lib import colors
@@ -316,7 +340,17 @@ def _build_stamping_pdf(image_paths: list[str | Path], output_path: str | Path, 
     sources = [Path(path).expanduser() for path in image_paths]
     if not sources:
         raise ValueError("Choose at least one image to convert.")
-    records = [_transcription_record(source, language) for source in sources]
+    records = []
+    for source in sources:
+        try:
+            records.append(_transcription_record(source, language))
+        except _UnreadableCertificateFields as exc:
+            if on_unreadable is None:
+                raise
+            corrections = on_unreadable(exc)
+            if corrections is None:
+                raise ValueError("Conversion cancelled; unreadable fields were not supplied.") from exc
+            records.append(_transcription_record(source, language, corrections))
     target = Path(output_path).expanduser()
     if any(source.resolve() == target.resolve() for source in sources):
         raise ValueError("The PDF output path must be different from every input image.")
@@ -376,7 +410,7 @@ def _build_stamping_pdf(image_paths: list[str | Path], output_path: str | Path, 
 
 def _run_gui() -> None:
     import tkinter as tk
-    from tkinter import filedialog, messagebox, ttk
+    from tkinter import filedialog, messagebox, simpledialog, ttk
 
     root = tk.Tk()
     root.title("Searchable JPG to PDF")
@@ -479,6 +513,27 @@ def _run_gui() -> None:
         dialog.bind("<Control-c>", lambda _event: copy_details())
         dialog.bind("<Control-C>", lambda _event: copy_details())
 
+    def ask_for_unreadable_fields(error: _UnreadableCertificateFields) -> dict[str, str] | None:
+        key_for_label = {
+            "CV number": "cv", "CV date": "date", "application number": "application",
+            "trader number": "trader", "stamping location": "stamping_place", "business name": "business_name",
+            "address": "address", "machine number": "machine", "make": "make", "model": "model",
+            "maximum capacity": "max", "minimum capacity": "min", "verification interval": "interval",
+            "denomination": "denomination", "instrument class": "class", "additional fee": "additional_fee",
+            "stamping fee": "stamping_fee",
+        }
+        corrections = {}
+        for label in error.missing:
+            value = simpledialog.askstring(
+                "Check unreadable OCR field",
+                f"OCR could not read the {label} in:\n{error.source.name}\n\nEnter it exactly as printed on the image:",
+                parent=root,
+            )
+            if value is None or not value.strip():
+                return None
+            corrections[key_for_label[label]] = value.strip()
+        return corrections
+
     ttk.Button(frame, text="Add images…", command=add_images).grid(row=3, column=0, sticky="w")
     ttk.Button(frame, text="Clear list / start over", command=clear_list).grid(row=3, column=1, sticky="w")
     ttk.Label(frame, text="Before conversion, choose the output format").grid(
@@ -549,7 +604,9 @@ def _run_gui() -> None:
                 status_var.set(f"Converting {len(image_paths)} image(s) into one PDF…")
                 root.update_idletasks()
                 if format_var.get() == "stamping":
-                    words = _build_stamping_pdf(image_paths, target, language=language)
+                    words = _build_stamping_pdf(
+                        image_paths, target, language=language, on_unreadable=ask_for_unreadable_fields
+                    )
                 else:
                     words = convert_images(image_paths, target, language=language)
                 output_summary = str(target)
@@ -567,7 +624,9 @@ def _run_gui() -> None:
                     status_var.set(f"Converting image {index} of {len(image_paths)}…")
                     root.update_idletasks()
                     if format_var.get() == "stamping":
-                        words += _build_stamping_pdf([image_path], target, language=language)
+                        words += _build_stamping_pdf(
+                            [image_path], target, language=language, on_unreadable=ask_for_unreadable_fields
+                        )
                     else:
                         words += convert_image(image_path, target, language=language)
                 output_summary = str(folder)
@@ -575,7 +634,7 @@ def _run_gui() -> None:
             status_var.set("Conversion failed.")
             show_copyable_error(
                 "Conversion failed",
-                f"{exc}\n\nCheck that Tesseract OCR and the selected language data are installed.",
+                str(exc),
             )
             return
         count = len(image_paths)
