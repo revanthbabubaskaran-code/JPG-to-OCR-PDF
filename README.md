@@ -28,6 +28,7 @@ Use **Add images…** to select one or more scans. Choose whether to save one co
 
 - **Regular OCR PDF** keeps the original scan visible and adds selectable/searchable OCR text.
 - **Stamping input transcription** creates a black and white data-entry PDF with a structured machine table that the stamping application can read. Fee details are omitted because they are not requested by the new application. It is visibly marked as a transcription, not an official certificate. If OCR cannot read a required field, the app asks you to type it from the source image rather than guessing. Verify every value before using it. This format currently expects one certificate with one machine per image.
+- **Both formats** creates both files: `<name>.pdf` for stamping input and `<name>_ocr.pdf` for the regular searchable PDF. With separate PDFs, each image creates `<name>_001.pdf` and `<name>_ocr_001.pdf`, then increments the number for the next image.
 
 Enter a PDF name and choose the output folder. Combined mode saves as `<name>.pdf`; separate mode saves as `<name>_001.pdf`, `<name>_002.pdf`, and so on. **Clear list / start over** removes the selected images and resets the form.
 
@@ -43,6 +44,12 @@ To create a stamping-input transcription instead, add `--format stamping`:
 
 ```powershell
 searchable-pdf "C:\Scans\certificate.jpg" "C:\Scans\certificate-transcription.pdf" --lang auto --format stamping
+```
+
+To save both formats, use `--format both`. The output path is used for the stamping transcription; `_ocr` is added to the regular searchable PDF name:
+
+```powershell
+searchable-pdf "C:\Scans\certificate.jpg" "C:\Scans\certificate.pdf" --lang auto --format both
 ```
 
 Supported image formats include JPG, PNG, TIFF, and BMP. The image is scaled proportionally to fit an A4-sized page. OCR language defaults to **auto**, which detects the page's dominant script and selects a matching installed Tesseract language (for example, Latin to `eng` or Tamil to `tam`). Enter a language code manually, such as `eng+tam`, when a page mixes languages. To check whether OCR worked, open the PDF and try selecting or searching for a word. OCR quality depends on image clarity, orientation, language data, and document layout; proofread important text.

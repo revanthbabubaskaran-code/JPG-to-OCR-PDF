@@ -442,7 +442,7 @@ def _run_gui() -> None:
 
     root = tk.Tk()
     root.title("Searchable JPG to PDF")
-    root.minsize(780, 700)
+    root.minsize(780, 740)
     frame = ttk.Frame(root, padding=18)
     frame.grid(sticky="nsew")
     root.columnconfigure(0, weight=1)
@@ -583,19 +583,23 @@ def _run_gui() -> None:
         frame, text="Stamping input transcription (data table; not an official certificate)", variable=format_var,
         value="stamping",
     ).grid(row=9, column=0, columnspan=3, sticky="w", pady=2)
+    ttk.Radiobutton(
+        frame, text="Both formats (stamping PDF plus a separate searchable PDF named with _ocr)", variable=format_var,
+        value="both",
+    ).grid(row=10, column=0, columnspan=3, sticky="w", pady=2)
     ttk.Label(frame, text="PDF name (you can enter it with or without .pdf)").grid(
-        row=10, column=0, columnspan=3, sticky="w", pady=(10, 2)
+        row=11, column=0, columnspan=3, sticky="w", pady=(10, 2)
     )
-    ttk.Entry(frame, textvariable=output_name_var).grid(row=11, column=0, columnspan=3, sticky="ew", pady=(2, 8))
-    ttk.Label(frame, text="Output folder").grid(row=12, column=0, columnspan=3, sticky="w")
-    ttk.Entry(frame, textvariable=destination_var).grid(row=13, column=0, columnspan=2, sticky="ew", pady=(2, 8))
-    ttk.Button(frame, text="Browse…", command=choose_destination).grid(row=13, column=2, padx=(8, 0), pady=(2, 8))
-    ttk.Label(frame, text="OCR language (auto-detected by default)").grid(row=14, column=0, sticky="w")
-    ttk.Entry(frame, textvariable=language_var, width=12).grid(row=15, column=0, sticky="w", pady=(3, 8))
+    ttk.Entry(frame, textvariable=output_name_var).grid(row=12, column=0, columnspan=3, sticky="ew", pady=(2, 8))
+    ttk.Label(frame, text="Output folder").grid(row=13, column=0, columnspan=3, sticky="w")
+    ttk.Entry(frame, textvariable=destination_var).grid(row=14, column=0, columnspan=2, sticky="ew", pady=(2, 8))
+    ttk.Button(frame, text="Browse…", command=choose_destination).grid(row=14, column=2, padx=(8, 0), pady=(2, 8))
+    ttk.Label(frame, text="OCR language (auto-detected by default)").grid(row=15, column=0, sticky="w")
+    ttk.Entry(frame, textvariable=language_var, width=12).grid(row=16, column=0, sticky="w", pady=(3, 8))
     ttk.Label(frame, text="Auto detects the page script. Or enter codes such as eng or eng+tam; install their Tesseract data files.").grid(
-        row=15, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(3, 8)
+        row=16, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(3, 8)
     )
-    ttk.Label(frame, textvariable=status_var, wraplength=680).grid(row=16, column=0, columnspan=3, sticky="w", pady=(0, 8))
+    ttk.Label(frame, textvariable=status_var, wraplength=680).grid(row=17, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
     def convert() -> None:
         if not image_paths:
@@ -621,42 +625,53 @@ def _run_gui() -> None:
             return
         language = language_var.get().strip() or "eng"
         folder = Path(destination_var.get())
+        plans: list[tuple[list[str] | None, Path, str]] = []
+        if mode_var.get() == "single":
+            stamping_target = folder / f"{entered_name}.pdf"
+            if format_var.get() == "both":
+                plans.extend([
+                    (image_paths, stamping_target, "stamping"),
+                    (image_paths, folder / f"{entered_name}_ocr.pdf", "ocr"),
+                ])
+            else:
+                plans.append((image_paths, stamping_target, format_var.get()))
+        else:
+            for index, image_path in enumerate(image_paths, start=1):
+                stamping_target = folder / f"{entered_name}_{index:03d}.pdf"
+                if format_var.get() == "both":
+                    plans.extend([
+                        ([image_path], stamping_target, "stamping"),
+                        ([image_path], folder / f"{entered_name}_ocr_{index:03d}.pdf", "ocr"),
+                    ])
+                else:
+                    plans.append(([image_path], stamping_target, format_var.get()))
+        existing = [target for _paths, target, _kind in plans if target.exists()]
+        if existing and not messagebox.askyesno(
+            "Replace existing PDFs?",
+            f"{len(existing)} output file(s) already exist in this folder. Replace them?",
+            parent=root,
+        ):
+            return
+
         try:
-            if mode_var.get() == "single":
-                target = folder / f"{entered_name}.pdf"
-                if target.exists() and not messagebox.askyesno(
-                    "Replace existing PDF?", f"This file already exists:\n{target}\n\nReplace it?", parent=root
-                ):
-                    return
-                status_var.set(f"Converting {len(image_paths)} image(s) into one PDF…")
+            records = 0
+            recognized_words = 0
+            for plan_index, (paths, target, kind) in enumerate(plans, start=1):
+                label = "stamping transcription" if kind == "stamping" else "searchable OCR PDF"
+                status_var.set(f"Creating {label} ({plan_index} of {len(plans)})…")
                 root.update_idletasks()
-                if format_var.get() == "stamping":
-                    words = _build_stamping_pdf(
-                        image_paths, target, language=language, on_unreadable=ask_for_unreadable_fields
+                if kind == "stamping":
+                    records += _build_stamping_pdf(
+                        paths or [], target, language=language, on_unreadable=ask_for_unreadable_fields
                     )
                 else:
-                    words = convert_images(image_paths, target, language=language)
-                output_summary = str(target)
+                    recognized_words += convert_images(paths or [], target, language=language)
+            if mode_var.get() == "single":
+                output_summary = "\n".join(str(target) for _paths, target, _kind in plans)
+                description = "one PDF" if len(plans) == 1 else "two PDFs"
             else:
-                output_paths = [folder / f"{entered_name}_{index:03d}.pdf" for index in range(1, len(image_paths) + 1)]
-                existing = [path for path in output_paths if path.exists()]
-                if existing and not messagebox.askyesno(
-                    "Replace existing PDFs?",
-                    f"{len(existing)} output file(s) already exist in this folder. Replace them?",
-                    parent=root,
-                ):
-                    return
-                words = 0
-                for index, (image_path, target) in enumerate(zip(image_paths, output_paths), start=1):
-                    status_var.set(f"Converting image {index} of {len(image_paths)}…")
-                    root.update_idletasks()
-                    if format_var.get() == "stamping":
-                        words += _build_stamping_pdf(
-                            [image_path], target, language=language, on_unreadable=ask_for_unreadable_fields
-                        )
-                    else:
-                        words += convert_image(image_path, target, language=language)
                 output_summary = str(folder)
+                description = f"{len(plans)} PDF(s)"
         except Exception as exc:
             status_var.set("Conversion failed.")
             show_copyable_error(
@@ -665,8 +680,12 @@ def _run_gui() -> None:
             )
             return
         count = len(image_paths)
-        description = "one PDF" if mode_var.get() == "single" else f"{count} PDF(s)"
-        detail = f"{words} transcription record(s)" if format_var.get() == "stamping" else f"{words} recognized words"
+        details = []
+        if format_var.get() in {"stamping", "both"}:
+            details.append(f"{records} transcription record(s)")
+        if format_var.get() in {"ocr", "both"}:
+            details.append(f"{recognized_words} searchable words")
+        detail = "; ".join(details)
         status_var.set(f"Finished: {count} image(s), {detail}.")
         messagebox.showinfo(
             "PDF conversion complete",
@@ -674,18 +693,18 @@ def _run_gui() -> None:
             parent=root,
         )
 
-    ttk.Button(frame, text="Convert", command=convert).grid(row=17, column=0, columnspan=3, sticky="ew", pady=(2, 0))
+    ttk.Button(frame, text="Convert", command=convert).grid(row=18, column=0, columnspan=3, sticky="ew", pady=(2, 0))
     root.mainloop()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create an OCR PDF or stamping-input transcription from an image.")
+    parser = argparse.ArgumentParser(description="Create an OCR PDF, stamping transcription, or both from an image.")
     parser.add_argument("image", nargs="?", help="Input JPG/PNG/TIFF/BMP image; omit to open the desktop app")
     parser.add_argument("output", nargs="?", help="Output PDF path")
     parser.add_argument("--lang", default="auto", help="Tesseract language code or auto (default: auto-detect script)")
     parser.add_argument(
-        "--format", choices=("ocr", "stamping"), default="ocr",
-        help="PDF format: image-faithful searchable OCR (default) or stamping-input transcription",
+        "--format", choices=("ocr", "stamping", "both"), default="ocr",
+        help="PDF format: searchable OCR, stamping-input transcription, or both",
     )
     args = parser.parse_args()
     if not args.image:
@@ -696,12 +715,20 @@ def main() -> None:
     try:
         if args.format == "stamping":
             words = _build_stamping_pdf([args.image], args.output, language=args.lang)
+        elif args.format == "both":
+            target = Path(args.output).expanduser()
+            ocr_target = target.with_name(f"{target.stem}_ocr{target.suffix or '.pdf'}")
+            words = _build_stamping_pdf([args.image], target, language=args.lang)
+            ocr_words = convert_image(args.image, ocr_target, language=args.lang)
         else:
             words = convert_image(args.image, args.output, language=args.lang)
     except Exception as exc:
         print(f"Conversion failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-    detail = f"{words} transcription record(s)" if args.format == "stamping" else f"{words} searchable words"
+    if args.format == "both":
+        detail = f"{words} transcription record(s) and {ocr_words} searchable words; OCR PDF: {ocr_target}"
+    else:
+        detail = f"{words} transcription record(s)" if args.format == "stamping" else f"{words} searchable words"
     print(f"Created {args.output} with {detail}.")
 
 
