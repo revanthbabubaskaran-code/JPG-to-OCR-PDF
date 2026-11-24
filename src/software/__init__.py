@@ -446,6 +446,39 @@ def _run_gui() -> None:
         if chosen:
             destination_var.set(chosen)
 
+    def show_copyable_error(title: str, details: str) -> None:
+        """Show conversion diagnostics in selectable text with a clipboard button."""
+        dialog = tk.Toplevel(root)
+        dialog.title(title)
+        dialog.transient(root)
+        dialog.resizable(True, True)
+        dialog.geometry("620x260")
+        container = ttk.Frame(dialog, padding=14)
+        container.grid(row=0, column=0, sticky="nsew")
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+        ttk.Label(container, text="Copy these details and send them for help:").grid(
+            row=0, column=0, sticky="w", pady=(0, 6)
+        )
+        details_box = tk.Text(container, wrap="word", height=7, width=72)
+        details_box.grid(row=1, column=0, sticky="nsew")
+        details_box.insert("1.0", details)
+        details_box.configure(state="disabled")
+        buttons = ttk.Frame(container)
+        buttons.grid(row=2, column=0, sticky="e", pady=(10, 0))
+
+        def copy_details() -> None:
+            dialog.clipboard_clear()
+            dialog.clipboard_append(details)
+            dialog.update()
+
+        ttk.Button(buttons, text="Copy error", command=copy_details).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(buttons, text="Close", command=dialog.destroy).grid(row=0, column=1)
+        dialog.bind("<Control-c>", lambda _event: copy_details())
+        dialog.bind("<Control-C>", lambda _event: copy_details())
+
     ttk.Button(frame, text="Add images…", command=add_images).grid(row=3, column=0, sticky="w")
     ttk.Button(frame, text="Clear list / start over", command=clear_list).grid(row=3, column=1, sticky="w")
     ttk.Label(frame, text="Before conversion, choose the output format").grid(
@@ -540,8 +573,9 @@ def _run_gui() -> None:
                 output_summary = str(folder)
         except Exception as exc:
             status_var.set("Conversion failed.")
-            messagebox.showerror(
-                "Conversion failed", f"{exc}\n\nCheck that Tesseract OCR and the selected language data are installed.", parent=root
+            show_copyable_error(
+                "Conversion failed",
+                f"{exc}\n\nCheck that Tesseract OCR and the selected language data are installed.",
             )
             return
         count = len(image_paths)

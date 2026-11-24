@@ -31,6 +31,8 @@ Use **Add images…** to select one or more scans. Choose whether to save one co
 
 Enter a PDF name and choose the output folder. Combined mode saves as `<name>.pdf`; separate mode saves as `<name>_001.pdf`, `<name>_002.pdf`, and so on. **Clear list / start over** removes the selected images and resets the form.
 
+If conversion fails, the error details appear in a selectable window with a **Copy error** button so they can be pasted into a support request.
+
 ## Command line
 
 ```powershell
